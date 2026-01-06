@@ -1,0 +1,46 @@
+    """
+    将多张同一人的图片写入数据库：
+      - 对每张图取评分最高的人脸 -> 对齐 -> embedding
+      - 求均值向量并 L2 归一�?
+      - 追加入库并保�?outputs/embeddings.npy & labels.json
+    """
+    global DB_EMB, DB_LABELS
+
+    try:
+        if not body.name:
+            raise ValueError("name 不能为空")
+        if not body.images_base64:
+            raise ValueError("images_base64 不能为空")
+
+        vecs = []
+        for b64 in body.images_base64:
+            img_bgr = _decode_base64_to_bgr(b64)
+            img_rgb = bgr2rgb(img_bgr)
+            faces = DETECTOR.detect_faces(img_rgb)
+            if not faces:
+                continue
+            f = max(faces, key=lambda x: x["score"])
+            aligned = align_face(img_rgb, f["keypoints"], size=IMAGE_SIZE)
+            vec = EMB_MODEL.get_embedding(aligned)
+            vecs.append(vec)
+
+        if not vecs:
+            raise ValueError("所有图片都未检测到可用人脸")
+
+        mean_vec = np.mean(np.stack(vecs, axis=0), axis=0)
+        mean_vec = mean_vec / (np.linalg.norm(mean_vec) + 1e-12)
+
+        with DB_LOCK:
+            if DB_EMB is None or DB_LABELS is None or len(DB_LABELS) == 0:
+                DB_EMB = np.expand_dims(mean_vec, axis=0)  # (1, 512)
+                DB_LABELS = [body.name]
+            else:
+                DB_EMB = np.concatenate([DB_EMB, np.expand_dims(mean_vec, axis=0)], axis=0)
+                DB_LABELS.append(body.name)
+
+            save_db(DB_EMB, DB_LABELS, out_emb=str(EMB_PATH), out_labels=str(LBL_PATH))
+
+        return {"ok": True, "name": body.name, "images_used": len(vecs), "db_size": len(DB_LABELS)}
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

@@ -1,0 +1,199 @@
+      /* /MOD */
+
+      // ===== 摄像�?=====
+      const video = document.getElementById("cam");
+      const canvas = document.getElementById("snap");
+      const preview = document.getElementById("preview");
+      const openCam = document.getElementById("openCam");
+      const takeShot = document.getElementById("takeShot");
+      const closeCam = document.getElementById("closeCam");
+      const camMsg = document.getElementById("camMsg");
+      let stream = null;
+
+      openCam.onclick = async () => {
+        /* MOD: 防重复开�?*/
+        if (stream) {
+          camMsg.textContent = "摄像头已开�?;
+          camMsg.className = "status";
+          return;
+        }
+        /* /MOD */
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          });
+          video.srcObject = stream;
+          video.style.display = "block";
+          preview.style.display = "none";
+          takeShot.disabled = false;
+          closeCam.disabled = true;
+
+          /* MOD: 若已就绪则不等待，否�?once 监听 */
+          if (video.readyState >= 2) {
+            // HAVE_CURRENT_DATA
+            closeCam.disabled = false;
+          } else {
+            await new Promise((resolve) =>
+              video.addEventListener("loadedmetadata", resolve, { once: true })
+            );
+            closeCam.disabled = false;
+          }
+          /* /MOD */
+
+          camMsg.textContent = "摄像头已开�?;
+          camMsg.className = "status";
+        } catch (e) {
+          camMsg.textContent = "开启失败：" + e.message;
+          camMsg.className = "status bad";
+        }
+      };
+
+      closeCam.onclick = () => {
+        if (stream) {
+          stream.getTracks().forEach((t) => t.stop());
+          stream = null;
+        }
+        video.style.display = "none";
+        preview.style.display = "flex";
+        preview.textContent = "未开启摄像头";
+        takeShot.disabled = true;
+        closeCam.disabled = true;
+        camMsg.textContent = "";
+      };
+
+      takeShot.onclick = async () => {
+        try {
+          const w = video.videoWidth,
+            h = video.videoHeight;
+          if (!w || !h) {
+            camMsg.textContent = "摄像头未就绪，请稍后再试";
+            camMsg.className = "status bad";
+            return;
+          }
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(video, 0, 0, w, h);
+
+          const blob = await new Promise((res) =>
+            canvas.toBlob(res, "image/jpeg", 0.92)
+          );
+          // 预览
+          preview.style.display = "block";
+          video.style.display = "none";
+          preview.innerHTML = "";
+          const imgURL = URL.createObjectURL(blob);
+          const img = new Image();
+          img.src = imgURL;
+          img.style.maxWidth = "100%";
+          img.style.borderRadius = "8px";
+          preview.appendChild(img);
+
+          const fd = new FormData();
+          fd.append("file", blob, "capture.jpg");
+          const r = await fetch(`${API}/verify`, {
+            method: "POST",
+            headers: HEADERS,
+            body: fd,
+          });
+          if (onAuthFail(r)) return; /* MOD: 401/403 统一处理 */
+          const j = await r.json();
+          if (r.ok && j.ok) {
+            camMsg.textContent = `识别成功�?{j.label}�?{(
+              j.score * 100
+            ).toFixed(1)}%）`;
+            camMsg.className = "status ok";
+          } else {
+            camMsg.textContent = `识别失败�?{j?.msg || "verify failed"}`;
+            camMsg.className = "status bad";
+          }
+        } catch (e) {
+          camMsg.textContent = "识别异常�? + e.message;
+          camMsg.className = "status bad";
+        }
+      };
+
+      // ===== 上传验证 =====
+      const fileVerify = document.getElementById("fileVerify");
+      const btnVerify = document.getElementById("btnVerify");
+      const upMsg = document.getElementById("upMsg");
+      btnVerify.onclick = async () => {
+        if (!fileVerify.files.length) {
+          upMsg.textContent = "请选择图片";
+          upMsg.className = "status";
+          return;
+        }
+        const fd = new FormData();
+        fd.append("file", fileVerify.files[0]);
+        upMsg.textContent = "上传�?..";
+        try {
+          const r = await fetch(`${API}/verify`, {
+            method: "POST",
+            headers: HEADERS,
+            body: fd,
+          });
+          if (onAuthFail(r)) return; /* MOD */
+          const j = await r.json();
+          if (r.ok && j.ok) {
+            upMsg.textContent = `识别成功�?{j.label}�?{(
+              j.score * 100
+            ).toFixed(1)}%）`;
+            upMsg.className = "status ok";
+          } else {
+            upMsg.textContent = `识别失败�?{j?.msg || "verify failed"}`;
+            upMsg.className = "status bad";
+          }
+        } catch (e) {
+          upMsg.textContent = "请求失败�? + e.message;
+          upMsg.className = "status bad";
+        }
+      };
+
+      // ===== 批量入库 =====
+      const enrollLabel = document.getElementById("enrollLabel");
+      const enrollFiles = document.getElementById("enrollFiles");
+      const btnEnroll = document.getElementById("btnEnroll");
+      const enrollMsg = document.getElementById("enrollMsg");
+
+      btnEnroll.onclick = async () => {
+        const label = (enrollLabel.value || "").trim();
+        if (!label) {
+          enrollMsg.textContent = "请填写标签（如学�?姓名�?;
+          enrollMsg.className = "status";
+          return;
+        }
+        if (!enrollFiles.files.length) {
+          enrollMsg.textContent = "请选择多张同一人的图片";
+          enrollMsg.className = "status";
+          return;
+        }
+        const fd = new FormData();
+        fd.append("label", label);
+        [...enrollFiles.files].forEach((f) => fd.append("files", f));
+        enrollMsg.textContent = "入库�?..";
+        try {
+          const r = await fetch(`${API}/enroll`, {
+            method: "POST",
+            headers: HEADERS,
+            body: fd,
+          });
+          if (onAuthFail(r)) return; /* MOD */
+          const j = await r.json();
+          if (r.ok && j.ok) {
+            enrollMsg.textContent = `入库成功�?{j.added || 0} 张，当前库：${
+              j.db_size || "-"
+            }`;
+            enrollMsg.className = "status ok";
+          } else {
+            enrollMsg.textContent = `入库失败�?{j?.msg || "enroll failed"}`;
+            enrollMsg.className = "status bad";
+          }
+        } catch (e) {
+          enrollMsg.textContent = "请求失败�? + e.message;
+          enrollMsg.className = "status bad";
+        }
+      };
+    </script>
+  </body>
+</html>
